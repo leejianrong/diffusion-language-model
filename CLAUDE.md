@@ -8,7 +8,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 
 | Slice | State |
 |---|---|
-| V1 CPU overfit + DLM loss oracles | not started |
+| V1 CPU overfit + DLM loss oracles | built (PR pending merge); `make test-integration` takes ~3.5 min |
 | V2 data shards | not started |
 | V3 pod smoke run | not started |
 | V4 full runs | not started |
@@ -17,6 +17,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 ## Commands
 
 - `make install` — `uv sync --frozen` (CPU torch). `make check` — lint, strict mypy, unit tests. Run it before every push.
+- `dlm train --config configs/tiny_dlm.yaml` / `dlm sample --run runs/<name> [--visible 0.5]` are the CLI entry points (JSON on stdout).
 - `make test` runs only `tests/unit` (no infra, CPU, seconds). Tests needing network/GPU/pod go in `tests/integration` with `@pytest.mark.integration`.
 - GPU pods install the CUDA torch wheel separately; never change the lockfile for that.
 

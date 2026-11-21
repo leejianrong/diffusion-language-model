@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fmt lint typecheck test check hooks
+.PHONY: help install fmt lint typecheck test test-integration check hooks
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -20,6 +20,9 @@ typecheck: ## Strict type check
 
 test: ## Fast no-infra tests (CPU, seconds)
 	uv run pytest tests/unit -q
+
+test-integration: ## Slow end-to-end tests (minutes, CPU). Not part of the gate
+	uv run pytest tests/integration -q -m integration
 
 check: lint typecheck test ## The pre-push gate: lint + types + fast tests
 

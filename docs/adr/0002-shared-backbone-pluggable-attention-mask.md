@@ -24,3 +24,7 @@ Fair AR vs DLM comparison needs the networks to differ only where the objectives
 - The comparison is clean: any quality gap is attributable to the objective and the mask.
 - Architecture choices (RoPE and so on) are tuned for neither model. Acceptable for a comparison, and phase 2 may revisit them.
 - Block-causal is tested as a mask but never trained here, so a phase-2 training bug is still possible.
+
+## Amendment (V1)
+
+The backbone has an optional learned absolute-position embedding (`abs_pos`, default off). Only the toy memorisation configs turn it on: without it, a bidirectional RoPE-only model has no anchor for absolute position and the DLM does not learn to memorise. Real runs keep RoPE only, and AR and DLM always share the same setting.
