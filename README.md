@@ -4,7 +4,7 @@ A from-scratch masked diffusion language model (MDLM-style) and an autoregressiv
 same OpenWebText tokens at ~125M parameters and compared under a fixed protocol: validation likelihood,
 generative perplexity with entropy, and throughput.
 
-**Status: planning done, V1 not started.** Nothing here trains yet. The longer-term aim is an
+**Status: V1 built (tiny CPU models, DLM loss oracles).** Nothing trains at real scale yet. The longer-term aim is an
 AR + diffusion block hybrid; this milestone builds the trusted parts that needs.
 
 - [Plan](docs/PLAN.md) · [Slices](docs/SLICES.md) · [Decision register](docs/QUESTIONS.md) · [ADRs](docs/adr/)

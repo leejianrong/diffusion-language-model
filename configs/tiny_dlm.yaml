@@ -1,0 +1,8 @@
+# Toy memorisation config for V1 (CPU, minutes). 128 random sequences of length 24.
+kind: dlm
+base_vocab: 32
+seed: 0
+run_name: tiny-dlm
+model: {n_layer: 2, d_model: 128, n_head: 4, abs_pos: true, block_size: 24}
+train: {steps: 3000, batch_size: 128, lr: 0.003, warmup: 50, ckpt_every: 1000, log_every: 100, eval_every: 500}
+data: {n_sequences: 128, seq_len: 24}

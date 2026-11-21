@@ -49,6 +49,9 @@ python_version = "3.12"
 strict = true
 files = ["src", "tests"]
 
+[project.scripts]
+dlm = "dlm.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
