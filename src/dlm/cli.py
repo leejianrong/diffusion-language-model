@@ -14,12 +14,13 @@ from dlm.diffusion import sample_ar, sample_dlm
 from dlm.owt import EOS_ID, SOURCE, gpt2_encoder, owt_documents
 from dlm.pod import PodError, PodPlan, launch, stop
 from dlm.runpod import ApiError, Client
-from dlm.shards import build_shards
+from dlm.shards import ShardIntegrityError, build_shards, verify_shards
 from dlm.train import NaNLossError, build_model, load_checkpoint, train
 
 EXIT_NAN = 3
 EXIT_BUDGET = 4
 EXIT_POD = 5
+EXIT_DATA = 6
 LEDGER = Path("budget.json")
 
 
@@ -30,6 +31,9 @@ def _cmd_train(a: argparse.Namespace) -> int:
     except NaNLossError as e:
         print(json.dumps({"error": str(e)}))
         return EXIT_NAN
+    except ShardIntegrityError as e:
+        print(json.dumps({"error": str(e)}))
+        return EXIT_DATA
     print(json.dumps(out))
     return 0
 
@@ -76,6 +80,16 @@ def _cmd_prep_data(a: argparse.Namespace) -> int:
         source=SOURCE,
     )
     print(json.dumps({k: m[k] for k in ("train", "val", "seed", "tokenizer")} | {"out": a.out}))
+    return 0
+
+
+def _cmd_verify_data(a: argparse.Namespace) -> int:
+    try:
+        out = verify_shards(Path(a.data), Path(a.manifest) if a.manifest else None)
+    except ShardIntegrityError as e:
+        print(json.dumps({"error": str(e)}))
+        return EXIT_DATA
+    print(json.dumps(out))
     return 0
 
 
@@ -126,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--seq-len", type=int, default=1024)
     d.add_argument("--keep-raw", action="store_true")
     d.set_defaults(fn=_cmd_prep_data)
+    v = sub.add_parser("verify-data")
+    v.add_argument("--data", default="data/owt")
+    v.add_argument("--manifest", default="configs/owt_manifest.json", help="trusted manifest")
+    v.set_defaults(fn=_cmd_verify_data)
     pd = sub.add_parser("pod")
     pd.add_argument("action", choices=["launch", "stop", "status"])
     pd.add_argument("--plan", help="pod plan YAML (launch and stop)")

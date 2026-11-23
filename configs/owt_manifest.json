@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "tokenizer": "gpt2",
+  "eos_id": 50256,
+  "seq_len": 1024,
+  "seed": 0,
+  "source": "Skylion007/openwebtext (plain_text, 80 parquet shards)",
+  "dtype": "uint16",
+  "val": {
+    "file": "val.bin",
+    "tokens": 5000192,
+    "docs": 4525,
+    "sha256": "a68cd8b69e722983ecc35e9dffbd1f30a35c292d58931db20eac77e1b3369d91"
+  },
+  "train": {
+    "tokens": 2000000000,
+    "shards": [
+      {
+        "file": "train_000.bin",
+        "tokens": 249999360,
+        "sha256": "3ca9e0745de8e79c0a8a6761cdf74e99b0d9f782918e9fad8311a40a5e550228"
+      },
+      {
+        "file": "train_001.bin",
+        "tokens": 249999360,
+        "sha256": "bf15ea99df1ffd33e6c89635a5c91f38aa101925997e44363cf62dfcb9ad3295"
+      },
+      {
+        "file": "train_002.bin",
+        "tokens": 249999360,
+        "sha256": "b2cf2bfeef6381d0deecf371bdbca47e5f46857d16351fd9623bfe4afba2bd51"
+      },
+      {
+        "file": "train_003.bin",
+        "tokens": 249999360,
+        "sha256": "844079919bcbf55865482fc8c96e4e67d90cf86c653f3fccfa39142dddae0751"
+      },
+      {
+        "file": "train_004.bin",
+        "tokens": 249999360,
+        "sha256": "fd34a54ff905a602990924855cb736811c15c080d1cc0c9e08b782560c05b0c0"
+      },
+      {
+        "file": "train_005.bin",
+        "tokens": 249999360,
+        "sha256": "7e87a0a5a6f82ab5e092b4361999935d847f67e351161666f22d80cc0029d58b"
+      },
+      {
+        "file": "train_006.bin",
+        "tokens": 249999360,
+        "sha256": "34e9456b2a9fdf82fbae972ea064a666f97641a5fe652f00aff22868c862db90"
+      },
+      {
+        "file": "train_007.bin",
+        "tokens": 249999360,
+        "sha256": "a02240ebc09b962bbb07e8d28f6cba33dd17cab7c81622b1136bb37429ff54b0"
+      },
+      {
+        "file": "train_008.bin",
+        "tokens": 5120,
+        "sha256": "7fc2a2ee335b830afb83b597b6a74ad1d4089bd2d8e85e525874a948278523db"
+      }
+    ]
+  }
+}

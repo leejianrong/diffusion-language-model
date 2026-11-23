@@ -28,6 +28,11 @@ class TrainConfig:
     ckpt_every: int = 100
     log_every: int = 50
     eval_every: int = 0
+    grad_accum: int = 1  # micro-batches per optimiser step; batch_size is the full batch
+    bf16: bool = False  # autocast forward to bfloat16 (loss and optimiser stay float32)
+    compile: bool = False
+    eval_seqs: int = 256  # validation sequences used when training on shards
+    eval_batch_size: int = 256
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,7 @@ class Config:
     seed: int = 0
     run_root: str = "runs"
     run_name: str = ""
+    data_dir: str = ""  # shard directory (V2); empty means the toy memorisation set
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     data: ToyDataConfig = field(default_factory=ToyDataConfig)

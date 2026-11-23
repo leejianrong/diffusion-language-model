@@ -128,3 +128,49 @@ def test_validation_loader_is_sequential(tmp_path: Path) -> None:
     v = ShardDataset(tmp_path, "val")
     raw = read(tmp_path, "val.bin")
     assert v.batch(0, 1)[0].tolist() == raw[:SEQ].tolist()
+
+
+def test_verify_passes_a_clean_build_and_rejects_every_kind_of_damage(tmp_path: Path) -> None:
+    from dlm.shards import ShardIntegrityError, verify_shards
+
+    build(tmp_path, docs(60))
+    assert verify_shards(tmp_path)["files"] >= 2
+    shard = tmp_path / "train_000.bin"
+    original = shard.read_bytes()
+
+    shard.write_bytes(bytes([original[0] ^ 1]) + original[1:])  # one flipped bit
+    with pytest.raises(ShardIntegrityError, match=r"train_000\.bin.*sha256"):
+        verify_shards(tmp_path)
+    shard.write_bytes(original[:-2])  # truncated upload
+    with pytest.raises(ShardIntegrityError, match=r"train_000\.bin.*size"):
+        verify_shards(tmp_path)
+    shard.unlink()  # missing
+    with pytest.raises(ShardIntegrityError, match=r"train_000\.bin.*missing"):
+        verify_shards(tmp_path)
+    shard.write_bytes(original)
+    assert verify_shards(tmp_path)["files"] >= 2
+
+
+def test_verify_against_a_separate_trusted_manifest(tmp_path: Path) -> None:
+    from dlm.shards import ShardIntegrityError, verify_shards
+
+    build(tmp_path / "a", docs(60))
+    build(tmp_path / "b", docs(60)[::-1])  # a different build of "the same" dataset
+    trusted = tmp_path / "a" / "manifest.json"
+    assert verify_shards(tmp_path / "a", manifest=trusted)["files"] >= 2
+    with pytest.raises(ShardIntegrityError):
+        verify_shards(tmp_path / "b", manifest=trusted)
+
+
+def test_verify_data_cli_exit_codes_and_train_maps_bad_data_to_the_same_code(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dlm.cli import EXIT_DATA, main
+
+    build(tmp_path, docs(60))
+    ok = ["verify-data", "--data", str(tmp_path), "--manifest", str(tmp_path / "manifest.json")]
+    assert main(ok) == 0
+    shard = tmp_path / "train_000.bin"
+    shard.write_bytes(b"\x07" + shard.read_bytes()[1:])
+    assert main(ok) == EXIT_DATA
+    assert "sha256" in capsys.readouterr().out
