@@ -139,3 +139,19 @@ def test_an_unreadable_pod_list_is_not_treated_as_clear(tmp_path: Path) -> None:
     with pytest.raises(PodError, match="could not list"):
         stop(plan(), lg, Broken(), verify_secs=0, sleep=lambda s: None)  # type: ignore[arg-type]
     assert lg.running("dlm-test")
+
+
+def test_job_file_is_shipped_inside_the_request_and_arms_after_the_switch(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import base64
+    import re
+
+    script = tmp_path / "job.sh"
+    script.write_text("echo hello from the job\n")
+    plan = PodPlan(
+        name="dlm-x", image="i", max_hourly_usd=1, max_lifetime_secs=60, job_file=str(script)
+    )
+    cmd = plan.create_body()["cmd"][0]
+    blob = re.search(r"echo (\S+) \| base64 -d", cmd).group(1)  # type: ignore[union-attr]
+    assert base64.b64decode(blob) == script.read_bytes()
+    assert cmd.index("sleep 60") < cmd.index("base64 -d")  # lifetime ceiling armed first
+    assert "curl" not in cmd and "git clone" not in cmd  # nothing fetched before the switch

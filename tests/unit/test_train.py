@@ -167,3 +167,20 @@ def test_bf16_flag_runs_forward_in_bf16_but_loss_stays_float32(
     cfg = _shard_cfg(tmp_path, shards, "bf", bf16=True)
     out = train(cfg)
     assert math.isfinite(out["last_loss"]) and out["step"] == 6
+
+
+def test_progress_goes_to_stderr_with_throughput(
+    tmp_path: Path, shards: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    train(_shard_cfg(tmp_path, shards, "p"))
+    lines = [x for x in capsys.readouterr().err.splitlines() if x.startswith("progress dlm ")]
+    assert len(lines) == 6
+    rec = json.loads(lines[-1].removeprefix("progress dlm "))
+    assert rec["step"] == 6 and rec["tok_per_s"] > 0
+
+
+def test_resuming_a_finished_run_keeps_its_last_loss(tmp_path: Path, shards: Path) -> None:
+    cfg = _shard_cfg(tmp_path, shards, "done")
+    first = train(cfg)
+    again = train(cfg, resume=True)  # no steps left
+    assert again["last_loss"] == first["last_loss"] and math.isfinite(again["last_loss"])

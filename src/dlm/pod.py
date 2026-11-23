@@ -7,6 +7,7 @@ Teardown has three layers, none of which depends on this machine staying connect
 3. the account spend limit in the RunPod console (set by the owner, outside this code).
 """
 
+import base64
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -27,9 +28,10 @@ class PodError(RuntimeError):
 class PodPlan:
     name: str  # unique per project, so we never touch another project's pods
     image: str
-    job_cmd: str
     max_hourly_usd: float
     max_lifetime_secs: int
+    job_cmd: str = ""
+    job_file: str = ""  # a script shipped inside the create request (no fetch before arming)
     cpu: dict[str, Any] | None = None  # {"id": "cpu3c", "vcpuCount": 2}
     gpu: dict[str, Any] | None = None  # passed through to the API; validated in the smoke slice
     idle_timeout_secs: int = 900
@@ -43,6 +45,14 @@ class PodPlan:
     def planned_usd(self) -> float:
         """Worst case: the price cap for the whole lifetime ceiling."""
         return self.max_hourly_usd * self.max_lifetime_secs / 3600
+
+    @property
+    def command(self) -> str:
+        """The job: job_cmd, or job_file embedded as base64 so nothing is fetched at boot."""
+        if not self.job_file:
+            return self.job_cmd
+        blob = base64.b64encode(Path(self.job_file).read_bytes()).decode()
+        return f"echo {blob} | base64 -d > /tmp/job.sh && bash /tmp/job.sh"
 
     @staticmethod
     def from_yaml(path: str | Path) -> "PodPlan":
@@ -63,7 +73,7 @@ PY
   kill -TERM -1 2>/dev/null || true
 }}
 ( sleep {self.max_lifetime_secs} ; terminate "max-lifetime {self.max_lifetime_secs}s" ) &
-( {self.job_cmd} 2>&1 | tee "$LOG" ) &
+( {self.command} 2>&1 | tee "$LOG" ) &
 JOB=$!
 (
   last=0 ; changed=$(date +%s)

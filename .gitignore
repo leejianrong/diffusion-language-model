@@ -17,3 +17,4 @@ data/
 *.ckpt
 runs/*/checkpoints/
 budget.json
+.pod-logs/

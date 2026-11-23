@@ -1,0 +1,22 @@
+# GPT-2-small shape on a 40M-token OpenWebText slice, 300 steps (~10M tokens). Pod smoke run only.
+kind: ar
+base_vocab: 50257
+seed: 0
+run_root: /workspace/runs
+run_name: smoke_ar
+data_dir: /workspace/data
+model: {block_size: 1024, n_layer: 12, n_head: 12, d_model: 768, abs_pos: false}
+train:
+  steps: 300
+  batch_size: 32
+  grad_accum: 2
+  lr: 0.0006
+  warmup: 30
+  weight_decay: 0.1
+  ckpt_every: 150
+  log_every: 10
+  eval_every: 100
+  eval_seqs: 64
+  eval_batch_size: 8
+  bf16: true
+  compile: true

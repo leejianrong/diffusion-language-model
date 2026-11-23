@@ -10,7 +10,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 |---|---|
 | V1 CPU overfit + DLM loss oracles | done; `make test-integration` takes ~3.5 min |
 | V2 data shards | in progress |
-| V3 pod smoke run | ledger, gate, launcher proven on CPU pods; shard verify and GPU trainer (bf16, compile, grad accumulation) done; GPU smoke run pending |
+| V3 pod smoke run | ledger, gate, launcher proven on CPU pods; shard verify and GPU trainer (bf16, compile, grad accumulation) done; GPU smoke run passed (AR and DLM, 300 steps each); kill-and-resume check on GPU still open |
 | V4 full runs | not started |
 | V5 benchmark + report | not started |
 
@@ -28,7 +28,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 
 Client is `dlm.runpod` (stdlib, `https://api.runpod.io/v2`; v1 and the old `rp` script are dead). The key is read by reference (env var or runpodctl's config), never logged, and error bodies are redacted. Pods get an API key and `RUNPOD_POD_ID` injected, which is how the pod-side switch terminates itself. The log endpoint is an SSE stream: use `Client.logs_text`, never a read-until-EOF. All response reads are bounded by a total deadline.
 
-`dlm pod launch|stop|status --plan <yaml>` goes through the budget gate. Proven live (2026-11-23, `scripts/pod_proof.py`, ~$0.02): the idle watchdog and the max-lifetime ceiling each terminated a CPU pod on their own. Re-run it after touching the start script or client. GPU request shape (`gpu` in the plan) is still unvalidated until the smoke run.
+`dlm pod launch|stop|status --plan <yaml>` goes through the budget gate. Proven live (2026-11-23, `scripts/pod_proof.py`, ~$0.02): the idle watchdog and the max-lifetime ceiling each terminated a CPU pod on their own. Re-run it after touching the start script or client. GPU pods: `gpu: {id: <catalog id>, count: 1}` in the plan, validated live. Check stock first (`GET /catalog/gpus?include=AVAILABILITY&product=POD`; a create with no capacity fails with 400 and spends nothing). The pod job is `scripts/pod_job.sh` (stage markers, 30 s heartbeat with WARN lines, per-step timeouts, always publishes an `RP_REPORT` block); drive it with `uv run python scripts/run_pod_job.py configs/pods/smoke.yaml`, which pins the pushed HEAD, watches the log, saves it to `.pod-logs/`, and always terminates and verifies. Measured numbers are in the ADR-0005 amendment.
 
 ## Workflow
 

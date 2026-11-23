@@ -23,3 +23,10 @@ The host has no GPU and 7 GB RAM. `runpodctl` is already installed. Budget is ab
 - No room for a second full-scale seed or for hyperparameter sweeps at full scale.
 - Pod spot interruptions are possible, so training must resume from a checkpoint (Q15).
 - If the cap is reached the plan degrades by shrinking scale, never by dropping the fairness rule.
+
+## Amendment 2026-11-24: measured on a real pod (smoke run, $0.24 spent)
+- Setup: one A100-SXM4-80GB (secure, $2.19/h), GPT-2-small shape, bf16 autocast plus `torch.compile`, 32 sequences of 1024 per step (two micro-batches of 16), torch 2.15.0+cu132 from PyPI on the `runpod/pytorch:2.8.0-py3.11` image with a uv-managed Python 3.12.
+- Throughput: AR 138k tokens/s, DLM 132k tokens/s (the DLM has one extra vocabulary row), 17 GB of GPU memory, GPU utilisation about 98%.
+- Projection for 2B tokens: AR about 4.0 h, DLM about 4.2 h, so about $8.80 and $9.10 on the secure cloud, roughly $17 for the pair. That is under the $15-25 per model estimate, so the full-scale plan stands and no shrink to 60M parameters is needed.
+- Caveats: a 300-step run, so sustained throughput on the full run may differ a little; GPU memory is far from full, so a bigger micro-batch may be faster; community A100 had no stock and secure was used.
+- RunPod's console spend limit is an hourly rate cap (`GET /v2/account/limits`, here $80/h), not a total, so the ledger in `budget.json` is the only total-spend cap.
