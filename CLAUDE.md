@@ -10,7 +10,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 |---|---|
 | V1 CPU overfit + DLM loss oracles | done; `make test-integration` takes ~3.5 min |
 | V2 data shards | in progress |
-| V3 pod smoke run | ledger, gate and launcher done and proven on CPU pods; GPU smoke run pending |
+| V3 pod smoke run | ledger, gate, launcher proven on CPU pods; shard verify and GPU trainer (bf16, compile, grad accumulation) done; GPU smoke run pending |
 | V4 full runs | not started |
 | V5 benchmark + report | not started |
 
@@ -19,6 +19,8 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 - `make install` — `uv sync --frozen` (CPU torch). `make check` — lint, strict mypy, unit tests. Run it before every push.
 - `dlm train --config configs/tiny_dlm.yaml` / `dlm sample --run runs/<name> [--visible 0.5]` are the CLI entry points (JSON on stdout).
 - `dlm prep-data --out data/owt` builds the 2B-token OpenWebText shards (downloads ~5 GB, ~20-30 min; `data/` is git-ignored). `ShardDataset` in `dlm.shards` reads them; batch order is a pure function of (seed, step).
+- `dlm verify-data` checks every shard's size and SHA-256 against the committed `configs/owt_manifest.json` (exit 6 on any mismatch); `dlm train` does the same before any compute when `data_dir` is set. Get shards to a pod by rebuilding there (`dlm prep-data`, deterministic) or copying, then verify.
+- Config knobs for real runs: `data_dir`, `train.bf16`, `train.compile`, `train.grad_accum` (batch_size is the full batch). A non-finite loss or gradient exits 3 and keeps the last checkpoint.
 - `make test` runs only `tests/unit` (no infra, CPU, seconds). Tests needing network/GPU/pod go in `tests/integration` with `@pytest.mark.integration`.
 - GPU pods install the CUDA torch wheel separately; never change the lockfile for that.
 

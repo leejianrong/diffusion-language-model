@@ -29,6 +29,32 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+class ShardIntegrityError(RuntimeError):
+    pass
+
+
+def verify_shards(data_dir: Path, manifest: Path | None = None) -> dict[str, Any]:
+    """Check every shard against a trusted manifest (default: the one in data_dir).
+
+    Pass a manifest from the repo to catch a corrupt or partial upload that carries its own
+    self-consistent manifest. Raises ShardIntegrityError naming each bad file.
+    """
+    m = json.loads((manifest or data_dir / "manifest.json").read_text())
+    files = [m["val"], *m["train"]["shards"]]
+    bad: list[str] = []
+    for f in files:
+        path = data_dir / f["file"]
+        if not path.exists():
+            bad.append(f"{f['file']}: missing")
+        elif path.stat().st_size != 2 * f["tokens"]:
+            bad.append(f"{f['file']}: size {path.stat().st_size} != {2 * f['tokens']}")
+        elif sha256_file(path) != f["sha256"]:
+            bad.append(f"{f['file']}: sha256 mismatch")
+    if bad:
+        raise ShardIntegrityError("shard check failed: " + "; ".join(bad))
+    return {"files": len(files), "tokens": m["train"]["tokens"] + m["val"]["tokens"]}
+
+
 def _batched(items: Iterable[str], n: int) -> Iterator[list[str]]:
     batch: list[str] = []
     for x in items:
