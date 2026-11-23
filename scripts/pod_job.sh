@@ -23,6 +23,8 @@ T_DATA=${T_DATA:-1500}
 T_TRAIN=${T_TRAIN:-1200}
 DEVICE=${DEVICE:-cuda}
 LOCAL=${LOCAL:-0}
+MODE=${MODE:-smoke}   # smoke | resume
+KILL_AFTER_STEP=${KILL_AFTER_STEP:-160}
 TORCH_SPEC=${TORCH_SPEC:-torch==2.15.0}
 
 mkdir -p "$RUN"
@@ -138,8 +140,39 @@ for c in $CONFIGS; do
   step "$T_TRAIN" dlm train --config "${CONFIG_DIR:-configs}/$c.yaml" --device "$DEVICE"
 done
 
-stage resume-check   # loads the final checkpoint and does zero further steps
-first=${CONFIGS%% *}
-step 600 dlm train --config "${CONFIG_DIR:-configs}/$first.yaml" --device "$DEVICE" --resume
+if [ "$MODE" = resume ]; then
+  # Kill a run partway with SIGKILL, resume it from its checkpoint, and require the final
+  # validation loss to land within 1% of the uninterrupted run above.
+  mkdir -p "$RUN/cfg"
+  for c in $CONFIGS; do
+    stage "kill-$c"
+    sed "s/^run_name: .*/run_name: ${c}_split/" "${CONFIG_DIR:-configs}/$c.yaml" > "$RUN/cfg/$c.yaml"
+    rm -rf "$WORK/runs/${c}_split"
+    dlm train --config "$RUN/cfg/$c.yaml" --device "$DEVICE" >> "$RUN/work.log" 2>&1 &
+    TP=$!
+    log="$WORK/runs/${c}_split/log.jsonl"
+    until [ -f "$log" ] && python3 -c "import json,sys; sys.exit(0 if any(json.loads(l)['step'] >= $KILL_AFTER_STEP for l in open('$log')) else 1)"; do
+      kill -0 "$TP" 2>/dev/null || { echo "ERROR training ended before the kill point"; exit 1; }
+      sleep 2
+    done
+    kill -9 "$TP"; wait "$TP" 2>/dev/null || true
+    echo "killed $c at: $(tail -1 "$log" | cut -c1-80)"
+    stage "resume-$c"
+    step "$T_TRAIN" dlm train --config "$RUN/cfg/$c.yaml" --device "$DEVICE" --resume
+    python3 - "$c" "$WORK" <<'PY'
+import json, sys
+c, work = sys.argv[1:]
+a = json.load(open(f"{work}/runs/{c}/results.json"))["eval_loss"]
+b = json.load(open(f"{work}/runs/{c}_split/results.json"))["eval_loss"]
+rel = abs(a - b) / a
+print(f"RESUME_CHECK {c} straight={a:.5f} killed_and_resumed={b:.5f} rel_diff={rel:.5%}")
+sys.exit(0 if rel < 0.01 else 1)
+PY
+  done
+else
+  stage resume-check   # loads the final checkpoint and does zero further steps
+  first=${CONFIGS%% *}
+  step 600 dlm train --config "${CONFIG_DIR:-configs}/$first.yaml" --device "$DEVICE" --resume
+fi
 
 stage done
