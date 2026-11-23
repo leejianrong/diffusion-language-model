@@ -184,3 +184,19 @@ def test_resuming_a_finished_run_keeps_its_last_loss(tmp_path: Path, shards: Pat
     first = train(cfg)
     again = train(cfg, resume=True)  # no steps left
     assert again["last_loss"] == first["last_loss"] and math.isfinite(again["last_loss"])
+
+
+@pytest.mark.parametrize("kind", ["ar", "dlm"])
+def test_resume_is_bit_identical_with_bf16_and_grad_accum_on_shards(
+    kind: str, tmp_path: Path, shards: Path
+) -> None:
+    def cfg(name: str) -> Config:
+        c = _shard_cfg(tmp_path, shards, name, steps=12, ckpt_every=6, bf16=True, grad_accum=2)
+        return Config.from_dict({**c.to_dict(), "kind": kind})
+
+    straight, split = cfg("a"), cfg("b")
+    train(straight)
+    train(split, stop_after=6)
+    train(split, resume=True)
+    a, b = (load_checkpoint(c.run_dir)["model"] for c in (straight, split))
+    assert all(torch.equal(a[k], b[k]) for k in a)

@@ -23,7 +23,7 @@ T_DATA=${T_DATA:-1500}
 T_TRAIN=${T_TRAIN:-1200}
 DEVICE=${DEVICE:-cuda}
 LOCAL=${LOCAL:-0}
-MODE=${MODE:-smoke}   # smoke | resume
+MODE=${MODE:-smoke}   # smoke | resume | diag
 KILL_AFTER_STEP=${KILL_AFTER_STEP:-160}
 TORCH_SPEC=${TORCH_SPEC:-torch==2.15.0}
 
@@ -135,12 +135,20 @@ fi
 stage verify
 step 300 dlm verify-data --data "${DATA_DIR:-$WORK/data}" --manifest "${DATA_DIR:-$WORK/data}/manifest.json"
 
+if [ "$MODE" = diag ]; then
+  stage diag
+  step "$T_TRAIN" python scripts/resume_diag.py "${CONFIG_DIR:-configs}/smoke_dlm.yaml"
+  CONFIGS=""
+fi
+
 for c in $CONFIGS; do
   stage "train-$c"
   step "$T_TRAIN" dlm train --config "${CONFIG_DIR:-configs}/$c.yaml" --device "$DEVICE"
 done
 
-if [ "$MODE" = resume ]; then
+if [ "$MODE" = diag ]; then
+  :
+elif [ "$MODE" = resume ]; then
   # Kill a run partway with SIGKILL, resume it from its checkpoint, and require the final
   # validation loss to land within 1% of the uninterrupted run above.
   mkdir -p "$RUN/cfg"

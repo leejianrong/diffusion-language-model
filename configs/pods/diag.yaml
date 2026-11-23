@@ -1,0 +1,15 @@
+# GPU kill-and-resume check (DLM-19). Worst case = 2.30 * 1500 / 3600 = $0.96.
+name: dlm-diag
+image: runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
+job_file: scripts/pod_job.sh
+gpu: {id: NVIDIA A100-SXM4-80GB, count: 1}
+cloud: SECURE
+max_hourly_usd: 2.30
+max_lifetime_secs: 1800
+idle_timeout_secs: 900
+idle_check_secs: 60
+exit_grace_secs: 120
+disk_gb: 80
+env:
+  GIT_REF: main
+  MODE: diag
