@@ -10,7 +10,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 |---|---|
 | V1 CPU overfit + DLM loss oracles | done; `make test-integration` takes ~3.5 min |
 | V2 data shards | in progress |
-| V3 pod smoke run | not started |
+| V3 pod smoke run | ledger + gate done; **pod launcher blocked** (see below) |
 | V4 full runs | not started |
 | V5 benchmark + report | not started |
 
@@ -21,6 +21,10 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 - `dlm prep-data --out data/owt` builds the 2B-token OpenWebText shards (downloads ~5 GB, ~20-30 min; `data/` is git-ignored). `ShardDataset` in `dlm.shards` reads them; batch order is a pure function of (seed, step).
 - `make test` runs only `tests/unit` (no infra, CPU, seconds). Tests needing network/GPU/pod go in `tests/integration` with `@pytest.mark.integration`.
 - GPU pods install the CUDA torch wheel separately; never change the lockfile for that.
+
+## RunPod: known blocker (2026-11-23)
+
+RunPod REST v1 is gone (`rest.runpod.io` is NXDOMAIN) and v2 lives at `https://api.runpod.io/v2`. The `rp` skill script and `runpodctl` 2.14.0 (installed locally, and pinned on the pod by `rp`) still target v1, so `rp up` cannot work and the pod-side self-terminate would silently fail. `dlm pod launch` is unit-tested against a fake runner only. Do not launch a real pod until the launcher is ported and the dead-man's-switch is proven on a cheap CPU pod. `runpodctl` 3.1.1 is the current release.
 
 ## Workflow
 
@@ -33,7 +37,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 - The DLM loss is the MDLM ELBO (ADR-0001). Verify against the oracles in V1, never against our own derivation.
 - AR and DLM share one backbone that differs only in attention mask and one `[MASK]` row (ADR-0002). Do not add model differences.
 - DLM sampling noise is float64 (ADR-0004). Do not "optimise" it to float32.
-- Spend on rented GPUs is capped at $60 and tracked in `budget.json`. Never launch a pod without the dead-man's-switch (ADR-0005).
+- Spend on rented GPUs is capped at $60 and tracked in `budget.json` (`dlm pod status`; the gate refuses a launch whose worst case would exceed the cap). Never launch a pod without the dead-man's-switch (ADR-0005).
 - Secrets (RunPod key, HF token) come from env vars only. Never commit or print them.
 
 ## Map
