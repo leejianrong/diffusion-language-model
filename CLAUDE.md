@@ -8,8 +8,8 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 
 | Slice | State |
 |---|---|
-| V1 CPU overfit + DLM loss oracles | built (PR pending merge); `make test-integration` takes ~3.5 min |
-| V2 data shards | not started |
+| V1 CPU overfit + DLM loss oracles | done; `make test-integration` takes ~3.5 min |
+| V2 data shards | in progress |
 | V3 pod smoke run | not started |
 | V4 full runs | not started |
 | V5 benchmark + report | not started |
@@ -18,6 +18,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 
 - `make install` — `uv sync --frozen` (CPU torch). `make check` — lint, strict mypy, unit tests. Run it before every push.
 - `dlm train --config configs/tiny_dlm.yaml` / `dlm sample --run runs/<name> [--visible 0.5]` are the CLI entry points (JSON on stdout).
+- `dlm prep-data --out data/owt` builds the 2B-token OpenWebText shards (downloads ~5 GB, ~20-30 min; `data/` is git-ignored). `ShardDataset` in `dlm.shards` reads them; batch order is a pure function of (seed, step).
 - `make test` runs only `tests/unit` (no infra, CPU, seconds). Tests needing network/GPU/pod go in `tests/integration` with `@pytest.mark.integration`.
 - GPU pods install the CUDA torch wheel separately; never change the lockfile for that.
 
