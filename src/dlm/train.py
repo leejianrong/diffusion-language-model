@@ -2,6 +2,7 @@
 
 import json
 import math
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -129,15 +130,20 @@ def train(
     )
     gen = torch.Generator().manual_seed(cfg.seed)
     step = 0
+    last_loss = float("nan")
     if resume:
         ck = load_checkpoint(run_dir)
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["opt"])
         gen.set_state(ck["gen"])
         step = int(ck["step"])
+        prior = run_dir / "results.json"
+        if prior.exists():  # a resume with nothing left to do must not erase the last loss
+            last_loss = float(json.loads(prior.read_text())["last_loss"])
     end = tc.steps if stop_after is None else min(tc.steps, stop_after)
     log = (run_dir / "log.jsonl").open("a")
-    t0, last = time.time(), float("nan")
+    t0, last = time.time(), last_loss
+    t_mark, step_mark = t0, step
     while step < end:
         for g in opt.param_groups:
             g["lr"] = lr_at(step, cfg)
@@ -156,16 +162,23 @@ def train(
         step += 1
         last = total
         if step % tc.log_every == 0 or step == end:
+            now = time.time()
+            tok_s = (step - step_mark) * tc.batch_size * seq_len / max(1e-9, now - t_mark)
+            t_mark, step_mark = now, step
             rec: dict[str, Any] = {
                 "step": step,
                 "tokens_seen": step * tc.batch_size * seq_len,
                 "loss": last,
-                "wall_s": time.time() - t0,
+                "wall_s": now - t0,
+                "tok_per_s": round(tok_s),
             }
+            if device.startswith("cuda"):
+                rec["gpu_mem_gb"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
             if tc.eval_every and step % tc.eval_every == 0:
                 rec["eval"] = evaluate(model, cfg, data, batch=tc.eval_batch_size)
             log.write(json.dumps(rec) + "\n")
             log.flush()
+            print(f"progress {cfg.kind} {json.dumps(rec)}", file=sys.stderr, flush=True)
         if step % tc.ckpt_every == 0 or step == end:
             _save(run_dir / "checkpoints" / "latest.pt", model, opt, step, gen)
     log.close()
