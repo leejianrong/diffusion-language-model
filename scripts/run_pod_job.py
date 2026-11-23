@@ -40,14 +40,20 @@ def pinned_ref() -> str:
     return sha
 
 
-def lines_of(text: str) -> list[str]:
+def lines_of(text: str) -> list[tuple[str, str]]:
+    """(source, line) pairs from the log stream: SSE `data:` records holding {"source","line"}."""
     out = []
     for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("data:"):
-            line = line[5:].strip()
-        if line:
-            out.append(line)
+        raw = raw.strip()
+        if raw.startswith("data:"):
+            raw = raw[5:].strip()
+        if not raw.startswith("{"):
+            continue  # SSE bookkeeping such as "id: <timestamp>"
+        try:
+            rec = json.loads(raw)
+            out.append((str(rec["source"]), str(rec["line"])))
+        except (ValueError, KeyError):
+            out.append(("raw", raw))
     return out
 
 
@@ -93,7 +99,7 @@ def main() -> int:
             except Exception as e:  # the pod may not be producing logs yet
                 text = ""
                 print(f"[{elapsed:.0f}s] logs unavailable ({type(e).__name__})", flush=True)
-            fresh = [x for x in lines_of(text) if x not in seen]
+            fresh = [x for src, x in lines_of(text) if x not in seen and src != "system"]
             with snap.open("a") as f:
                 for x in fresh:
                     seen.add(x)
