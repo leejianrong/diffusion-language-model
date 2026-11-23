@@ -10,6 +10,8 @@ import torch
 from dlm.config import Config
 from dlm.data import memorisation_accuracy, toy_dataset
 from dlm.diffusion import sample_ar, sample_dlm
+from dlm.owt import EOS_ID, SOURCE, gpt2_encoder, owt_documents
+from dlm.shards import build_shards
 from dlm.train import NaNLossError, build_model, load_checkpoint, train
 
 EXIT_NAN = 3
@@ -53,6 +55,24 @@ def _cmd_sample(a: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_prep_data(a: argparse.Namespace) -> int:
+    m = build_shards(
+        owt_documents(a.seed, Path(a.raw), keep_raw=a.keep_raw),
+        gpt2_encoder(),
+        Path(a.out),
+        train_tokens=a.train_tokens,
+        val_tokens=a.val_tokens,
+        shard_tokens=a.shard_tokens,
+        seq_len=a.seq_len,
+        eos=EOS_ID,
+        seed=a.seed,
+        tokenizer="gpt2",
+        source=SOURCE,
+    )
+    print(json.dumps({k: m[k] for k in ("train", "val", "seed", "tokenizer")} | {"out": a.out}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="dlm")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -71,6 +91,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     s.add_argument("--device", default="cpu")
     s.set_defaults(fn=_cmd_sample)
+    d = sub.add_parser("prep-data")
+    d.add_argument("--out", default="data/owt")
+    d.add_argument("--raw", default="data/raw")
+    d.add_argument("--seed", type=int, default=0)
+    d.add_argument("--train-tokens", type=int, default=2_000_000_000)
+    d.add_argument("--val-tokens", type=int, default=5_000_000)
+    d.add_argument("--shard-tokens", type=int, default=244140 * 1024)
+    d.add_argument("--seq-len", type=int, default=1024)
+    d.add_argument("--keep-raw", action="store_true")
+    d.set_defaults(fn=_cmd_prep_data)
     a = p.parse_args(argv)
     return int(a.fn(a))
 

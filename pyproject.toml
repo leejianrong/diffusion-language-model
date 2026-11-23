@@ -7,6 +7,7 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.0",
+    "pyarrow>=17.0",
     "pyyaml>=6.0",
     "tiktoken>=0.8",
     "torch>=2.5",
@@ -51,6 +52,10 @@ files = ["src", "tests"]
 
 [project.scripts]
 dlm = "dlm.cli:main"
+
+[[tool.mypy.overrides]]
+module = ["pyarrow.*", "tiktoken.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
