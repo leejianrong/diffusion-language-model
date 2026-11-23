@@ -7,14 +7,20 @@ from pathlib import Path
 
 import torch
 
+from dlm.budget import BudgetExceededError, Ledger
 from dlm.config import Config
 from dlm.data import memorisation_accuracy, toy_dataset
 from dlm.diffusion import sample_ar, sample_dlm
 from dlm.owt import EOS_ID, SOURCE, gpt2_encoder, owt_documents
+from dlm.pod import PodError, PodPlan, launch, stop
 from dlm.shards import build_shards
 from dlm.train import NaNLossError, build_model, load_checkpoint, train
 
 EXIT_NAN = 3
+EXIT_BUDGET = 4
+EXIT_POD = 5
+LEDGER = Path("budget.json")
+POD_STATE = Path(".rp-state")
 
 
 def _cmd_train(a: argparse.Namespace) -> int:
@@ -73,6 +79,25 @@ def _cmd_prep_data(a: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pod(a: argparse.Namespace) -> int:
+    ledger = Ledger(LEDGER)
+    try:
+        if a.action == "status":
+            out = ledger.summary()
+        elif a.action == "launch":
+            out = launch(PodPlan.from_yaml(a.plan), ledger, POD_STATE)
+        else:
+            out = stop(PodPlan.from_yaml(a.plan), ledger, POD_STATE)
+    except BudgetExceededError as e:
+        print(json.dumps({"error": str(e)}))
+        return EXIT_BUDGET
+    except PodError as e:
+        print(json.dumps({"error": str(e)}))
+        return EXIT_POD
+    print(json.dumps(out))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="dlm")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -101,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--seq-len", type=int, default=1024)
     d.add_argument("--keep-raw", action="store_true")
     d.set_defaults(fn=_cmd_prep_data)
+    pd = sub.add_parser("pod")
+    pd.add_argument("action", choices=["launch", "stop", "status"])
+    pd.add_argument("--plan", help="pod plan YAML (launch and stop)")
+    pd.set_defaults(fn=_cmd_pod)
     a = p.parse_args(argv)
     return int(a.fn(a))
 
