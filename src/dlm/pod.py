@@ -1,17 +1,14 @@
-"""Pod launcher. Wraps the runpod-jobs `rp` script, adding the budget gate and the ledger.
+"""Pod launcher on the RunPod REST v2 client, with the budget gate and ledger (ADR-0005).
 
-`rp` owns the pod lifecycle and bakes the pod-side dead-man's-switch (max lifetime plus an idle
-watchdog) into the start command, so teardown does not depend on this machine staying connected.
-This module decides whether a launch is allowed, records it, and records the stop only after
-verifying the pod is really gone.
+Teardown has three layers, none of which depends on this machine staying connected:
+1. the pod runs a dead-man's-switch as its very first act (hard max lifetime plus an idle watchdog),
+   inlined as literal shell with no network fetch before it is armed;
+2. `stop` terminates, then verifies the pod is really gone before the ledger records the stop;
+3. the account spend limit in the RunPod console (set by the owner, outside this code).
 """
 
-import json
-import os
-import re
-import shlex
-import subprocess
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,9 +16,7 @@ from typing import Any
 import yaml
 
 from dlm.budget import Ledger
-
-CompletedLike = subprocess.CompletedProcess[str]
-Runner = Callable[[list[str], Mapping[str, str]], CompletedLike]
+from dlm.runpod import Client
 
 
 class PodError(RuntimeError):
@@ -35,92 +30,108 @@ class PodPlan:
     job_cmd: str
     max_hourly_usd: float
     max_lifetime_secs: int
-    compute_type: str = "GPU"
-    gpu_types: list[str] = field(default_factory=list)
+    cpu: dict[str, Any] | None = None  # {"id": "cpu3c", "vcpuCount": 2}
+    gpu: dict[str, Any] | None = None  # passed through to the API; validated in the smoke slice
     idle_timeout_secs: int = 900
-    container_disk_gb: int = 50
-    volume_gb: int = 0
-    cloud_type: str = "SECURE"
+    idle_check_secs: int = 60
+    exit_grace_secs: int = 30
+    disk_gb: int = 20
+    cloud: str = "SECURE"
+    env: dict[str, str] = field(default_factory=dict)
 
     @property
     def planned_usd(self) -> float:
         """Worst case: the price cap for the whole lifetime ceiling."""
         return self.max_hourly_usd * self.max_lifetime_secs / 3600
 
-    def env(self, state_file: Path) -> dict[str, str]:
-        e = {
-            "RP_POD_NAME": self.name,
-            "RP_POD_IMAGE": self.image,
-            "RP_JOB_CMD": self.job_cmd,
-            "RP_COMPUTE_TYPE": self.compute_type,
-            "RP_MAX_HOURLY_USD": str(self.max_hourly_usd),
-            "RP_MAX_LIFETIME_SECS": str(self.max_lifetime_secs),
-            "RP_IDLE_TIMEOUT_SECS": str(self.idle_timeout_secs),
-            "RP_CONTAINER_DISK_GB": str(self.container_disk_gb),
-            "RP_VOLUME_GB": str(self.volume_gb),
-            "RP_CLOUD_TYPE": self.cloud_type,
-            "RP_INTERRUPTIBLE": "false",  # spot pods are no longer offered (runpod-jobs notes)
-            "RP_STATE_FILE": str(state_file),
-        }
-        if self.gpu_types:
-            e["RP_GPU_TYPE"] = ",".join(self.gpu_types)
-        return e
-
     @staticmethod
     def from_yaml(path: str | Path) -> "PodPlan":
         return PodPlan(**yaml.safe_load(Path(path).read_text()))
 
+    def start_script(self) -> str:
+        """Dead-man's-switch first, then the job. Needs only bash and python3 on the image."""
+        return f"""set -u
+LOG=/tmp/dlm-job.log ; : > "$LOG"
+terminate() {{
+  echo "pod: self-terminating ($1)" >&2
+  python3 - >&2 <<'PY' || echo "pod: self-terminate FAILED" >&2
+import os, urllib.request as u
+req = u.Request("https://api.runpod.io/v2/pods/" + os.environ["RUNPOD_POD_ID"], method="DELETE",
+                headers={{"Authorization": "Bearer " + os.environ["RUNPOD_API_KEY"]}})
+print("pod: terminate http", u.urlopen(req, timeout=20).status)
+PY
+  kill -TERM -1 2>/dev/null || true
+}}
+( sleep {self.max_lifetime_secs} ; terminate "max-lifetime {self.max_lifetime_secs}s" ) &
+( {self.job_cmd} 2>&1 | tee "$LOG" ) &
+JOB=$!
+(
+  last=0 ; changed=$(date +%s)
+  while kill -0 "$JOB" 2>/dev/null; do
+    sleep {self.idle_check_secs}
+    size=$(wc -c < "$LOG" 2>/dev/null || echo 0) ; now=$(date +%s)
+    if [ "$size" != "$last" ]; then last=$size ; changed=$now
+    elif [ $((now - changed)) -ge {self.idle_timeout_secs} ]; then
+      terminate "idle {self.idle_timeout_secs}s" ; break
+    fi
+  done
+) &
+wait "$JOB" ; sleep {self.exit_grace_secs} ; terminate "job exited"
+"""
 
-def rp_command() -> list[str]:
-    """`rp` may need the API key supplied by reference, e.g. DLM_RP='with-runpod-key rp'."""
-    return shlex.split(os.environ.get("DLM_RP", "rp"))
+    def create_body(self) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "name": self.name,
+            "image": self.image,
+            "cloud": self.cloud,
+            "disk": self.disk_gb,
+            "entrypoint": ["bash", "-c"],
+            "cmd": [self.start_script()],
+        }
+        if self.cpu:
+            body["cpu"] = self.cpu
+        if self.gpu:
+            body["gpu"] = self.gpu
+        if self.env:
+            body["env"] = self.env
+        return body
 
 
-def subprocess_runner(cmd: list[str], env: Mapping[str, str]) -> CompletedLike:
-    return subprocess.run(
-        cmd, env={**os.environ, **env}, capture_output=True, text=True, check=False
-    )
+def _hourly(pod: dict[str, Any], fallback: float) -> float:
+    """Best-effort hourly price from the pod record; fall back to the plan's cap (conservative)."""
+    cost = pod.get("cost")
+    if isinstance(cost, int | float):
+        return float(cost)
+    if isinstance(cost, dict):
+        for k in ("perHr", "hourly", "perHour", "costPerHr", "price"):
+            if isinstance(cost.get(k), int | float):
+                return float(cost[k])
+    return fallback
 
 
-def runpodctl_pod_names(run: Runner = subprocess_runner) -> list[str]:
-    """Names of every pod on the account. Parsed from JSON and field-selected, never echoed."""
-    r = run(["runpodctl", "pod", "list"], {})
-    if r.returncode != 0:
-        raise PodError("could not list pods; refusing to assume the account is clear")
+def pod_names(client: Client) -> list[str]:
     try:
-        pods: Any = json.loads(r.stdout)
-        return [str(p["name"]) for p in pods]
-    except (ValueError, KeyError, TypeError) as e:
-        raise PodError("unparseable pod list; refusing to assume the account is clear") from e
+        return [str(p["name"]) for p in client.list_pods()]
+    except Exception as e:  # fail closed: an unreadable list never counts as "clear"
+        raise PodError(
+            f"could not list pods ({type(e).__name__}); not assuming the account is clear"
+        ) from e
 
 
-def _hourly_from_status(text: str, fallback: float) -> float:
-    """`rp status` prints 'pod <id>: <state> <cost>'. Fall back to the cap if unparseable."""
-    m = re.search(r"(\d+(?:\.\d+)?)\s*$", text.strip())
-    return float(m.group(1)) if m else fallback
-
-
-def launch(
-    plan: PodPlan, ledger: Ledger, state_file: Path, run: Runner = subprocess_runner
-) -> dict[str, Any]:
+def launch(plan: PodPlan, ledger: Ledger, client: Client) -> dict[str, Any]:
     if ledger.running(plan.name):
         raise PodError(f"ledger already shows a running '{plan.name}' pod; stop it first")
-    ledger.check(plan.planned_usd)  # raises BudgetExceededError
-    env, rp = plan.env(state_file), rp_command()
-    up = run([*rp, "up"], env)
-    if up.returncode != 0:
-        raise PodError(f"rp up failed: {up.stderr.strip()[-400:]}")
-    pod_id = up.stdout.strip().splitlines()[-1]
+    ledger.check(plan.planned_usd)  # raises BudgetExceededError before any API call
+    pod = client.create_pod(plan.create_body())
+    pod_id = str(pod["id"])
     try:
-        st = run([*rp, "status"], env)
-        hourly = (
-            _hourly_from_status(st.stdout, plan.max_hourly_usd)
-            if st.returncode == 0
-            else plan.max_hourly_usd
-        )
+        info = client.get_pod(pod_id)
+        hourly = _hourly(info, plan.max_hourly_usd)
+        if hourly > plan.max_hourly_usd:
+            raise PodError(f"pod costs ${hourly}/h, above the ${plan.max_hourly_usd}/h cap")
         ledger.start(pod_id, plan.name, hourly, plan.max_lifetime_secs / 3600)
     except Exception:
-        run([*rp, "down"], env)  # never leave a pod running that the ledger does not know about
+        client.terminate(pod_id)  # never leave a pod running that the ledger does not know about
         raise
     return {"pod_id": pod_id, "hourly_usd": hourly, **ledger.summary()}
 
@@ -128,18 +139,23 @@ def launch(
 def stop(
     plan: PodPlan,
     ledger: Ledger,
-    state_file: Path,
-    run: Runner = subprocess_runner,
-    list_names: Callable[[], list[str]] | None = None,
+    client: Client,
+    *,
+    verify_secs: float = 90.0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """Terminate, verify the pod is gone, then record the stop. Idempotent."""
-    env, rp = plan.env(state_file), rp_command()
-    down = run([*rp, "down"], env)
-    if down.returncode != 0:
-        raise PodError(f"rp down failed, ledger left running: {down.stderr.strip()[-400:]}")
-    names = (list_names or (lambda: runpodctl_pod_names(run)))()
-    if plan.name in names:
-        raise PodError(f"pod '{plan.name}' still present after delete, ledger left running")
-    for rec in ledger.running(plan.name):
-        ledger.stop(rec.pod_id)
+    ids = {r.pod_id for r in ledger.running(plan.name)}
+    for pid in ids:
+        client.terminate(pid)
+    deadline = time.monotonic() + verify_secs
+    while True:
+        gone = plan.name not in pod_names(client)
+        if gone:
+            break
+        if time.monotonic() >= deadline:
+            raise PodError(f"pod '{plan.name}' still present after terminate, ledger left running")
+        sleep(3)
+    for pid in ids:
+        ledger.stop(pid)
     return ledger.summary()

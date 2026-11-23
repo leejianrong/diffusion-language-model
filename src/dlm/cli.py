@@ -13,6 +13,7 @@ from dlm.data import memorisation_accuracy, toy_dataset
 from dlm.diffusion import sample_ar, sample_dlm
 from dlm.owt import EOS_ID, SOURCE, gpt2_encoder, owt_documents
 from dlm.pod import PodError, PodPlan, launch, stop
+from dlm.runpod import ApiError, Client
 from dlm.shards import build_shards
 from dlm.train import NaNLossError, build_model, load_checkpoint, train
 
@@ -20,7 +21,6 @@ EXIT_NAN = 3
 EXIT_BUDGET = 4
 EXIT_POD = 5
 LEDGER = Path("budget.json")
-POD_STATE = Path(".rp-state")
 
 
 def _cmd_train(a: argparse.Namespace) -> int:
@@ -85,13 +85,13 @@ def _cmd_pod(a: argparse.Namespace) -> int:
         if a.action == "status":
             out = ledger.summary()
         elif a.action == "launch":
-            out = launch(PodPlan.from_yaml(a.plan), ledger, POD_STATE)
+            out = launch(PodPlan.from_yaml(a.plan), ledger, Client())
         else:
-            out = stop(PodPlan.from_yaml(a.plan), ledger, POD_STATE)
+            out = stop(PodPlan.from_yaml(a.plan), ledger, Client())
     except BudgetExceededError as e:
         print(json.dumps({"error": str(e)}))
         return EXIT_BUDGET
-    except PodError as e:
+    except (PodError, ApiError) as e:
         print(json.dumps({"error": str(e)}))
         return EXIT_POD
     print(json.dumps(out))

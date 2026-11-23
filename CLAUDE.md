@@ -10,7 +10,7 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 |---|---|
 | V1 CPU overfit + DLM loss oracles | done; `make test-integration` takes ~3.5 min |
 | V2 data shards | in progress |
-| V3 pod smoke run | ledger + gate done; **pod launcher blocked** (see below) |
+| V3 pod smoke run | ledger, gate and launcher done and proven on CPU pods; GPU smoke run pending |
 | V4 full runs | not started |
 | V5 benchmark + report | not started |
 
@@ -22,9 +22,11 @@ Trust the code over the docs where they disagree, and fix the docs in the same P
 - `make test` runs only `tests/unit` (no infra, CPU, seconds). Tests needing network/GPU/pod go in `tests/integration` with `@pytest.mark.integration`.
 - GPU pods install the CUDA torch wheel separately; never change the lockfile for that.
 
-## RunPod: known blocker (2026-11-23)
+## RunPod (REST v2)
 
-RunPod REST v1 is gone (`rest.runpod.io` is NXDOMAIN) and v2 lives at `https://api.runpod.io/v2`. The `rp` skill script and `runpodctl` 2.14.0 (installed locally, and pinned on the pod by `rp`) still target v1, so `rp up` cannot work and the pod-side self-terminate would silently fail. `dlm pod launch` is unit-tested against a fake runner only. Do not launch a real pod until the launcher is ported and the dead-man's-switch is proven on a cheap CPU pod. `runpodctl` 3.1.1 is the current release.
+Client is `dlm.runpod` (stdlib, `https://api.runpod.io/v2`; v1 and the old `rp` script are dead). The key is read by reference (env var or runpodctl's config), never logged, and error bodies are redacted. Pods get an API key and `RUNPOD_POD_ID` injected, which is how the pod-side switch terminates itself. The log endpoint is an SSE stream: use `Client.logs_text`, never a read-until-EOF. All response reads are bounded by a total deadline.
+
+`dlm pod launch|stop|status --plan <yaml>` goes through the budget gate. Proven live (2026-11-23, `scripts/pod_proof.py`, ~$0.02): the idle watchdog and the max-lifetime ceiling each terminated a CPU pod on their own. Re-run it after touching the start script or client. GPU request shape (`gpu` in the plan) is still unvalidated until the smoke run.
 
 ## Workflow
 

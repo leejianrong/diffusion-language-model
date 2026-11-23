@@ -1,117 +1,141 @@
 import subprocess
-from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from dlm.budget import BudgetExceededError, Ledger
-from dlm.pod import PodError, PodPlan, launch, runpodctl_pod_names, stop
+from dlm.pod import PodError, PodPlan, launch, stop
+from dlm.runpod import ApiError
 
-STATE = Path(".rp-state-test")
 
+class FakeClient:
+    def __init__(self, cost: Any = 1.5, still_listed_for: int = 0) -> None:
+        self.cost, self.listed_polls, self.calls = cost, still_listed_for, []  # type: ignore[var-annotated]
+        self.pods: dict[str, str] = {}
 
-class FakeRunner:
-    """Scripted replacement for subprocess: keyed on the rp subcommand (last arg)."""
+    def create_pod(self, body: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append("create")
+        self.pods["pod123"] = body["name"]
+        return {"id": "pod123"}
 
-    def __init__(self, replies: dict[str, tuple[int, str, str]] | None = None) -> None:
-        self.replies = {"up": (0, "pod123\n", ""), "status": (0, "pod pod123: RUNNING 1.5\n", ""),
-                        "down": (0, "", "")}  # fmt: skip
-        self.replies.update(replies or {})
-        self.calls: list[str] = []
+    def get_pod(self, pod_id: str) -> dict[str, Any]:
+        self.calls.append("get")
+        return {"id": pod_id, "cost": self.cost}
 
-    def __call__(self, cmd: list[str], env: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
-        self.calls.append(cmd[-1])
-        rc, out, err = self.replies.get(cmd[-1], (0, "", ""))
-        return subprocess.CompletedProcess(cmd, rc, out, err)
+    def terminate(self, pod_id: str) -> None:
+        self.calls.append("terminate")
+        if self.listed_polls <= 0:
+            self.pods.pop(pod_id, None)
+
+    def list_pods(self) -> list[dict[str, Any]]:
+        self.calls.append("list")
+        if self.listed_polls > 0:
+            self.listed_polls -= 1
+            if self.listed_polls == 0:
+                self.pods.clear()
+        return [{"id": i, "name": n} for i, n in self.pods.items()]
 
 
 def plan(hourly: float = 2.0, secs: int = 3600) -> PodPlan:
-    return PodPlan(name="dlm-test", image="img", job_cmd="true", max_hourly_usd=hourly,
-                   max_lifetime_secs=secs, gpu_types=["NVIDIA A100 80GB PCIe"])  # fmt: skip
+    return PodPlan(name="dlm-test", image="img", job_cmd="echo hi", max_hourly_usd=hourly,
+                   max_lifetime_secs=secs, cpu={"id": "cpu3c", "vcpuCount": 2})  # fmt: skip
 
 
 def new_ledger(tmp_path: Path, cap: float = 60.0) -> Ledger:
     return Ledger(tmp_path / "budget.json", cap_usd=cap, now=lambda: 1_000_000.0)
 
 
-def test_plan_worst_case_and_env_never_requests_spot() -> None:
-    p = plan(hourly=1.5, secs=7200)
-    assert p.planned_usd == pytest.approx(3.0)
-    env = p.env(STATE)
-    assert env["RP_INTERRUPTIBLE"] == "false" and env["RP_POD_NAME"] == "dlm-test"
-    assert env["RP_MAX_LIFETIME_SECS"] == "7200" and "RUNPOD_API_KEY" not in env
+def test_start_script_is_valid_bash_and_arms_the_switch_before_the_job() -> None:
+    script = plan(secs=900).start_script()
+    assert (
+        subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True).returncode == 0
+    )
+    assert script.index("sleep 900") < script.index("echo hi")  # max-lifetime armed before the job
+    assert script.index("terminate()") < script.index("echo hi")
+    assert (
+        "curl" not in script and "wget" not in script and "apt" not in script
+    )  # nothing to hang on first
 
 
-def test_launch_over_budget_never_calls_rp(tmp_path: Path) -> None:
-    run = FakeRunner()
+def test_create_body_requests_only_what_the_plan_says() -> None:
+    b = plan().create_body()
+    assert (
+        b["name"] == "dlm-test" and b["cpu"] == {"id": "cpu3c", "vcpuCount": 2} and "gpu" not in b
+    )
+    assert "env" not in b  # no secrets leave the machine unless the plan asks for them
+
+
+def test_launch_over_budget_never_calls_the_api(tmp_path: Path) -> None:
+    c = FakeClient()
     with pytest.raises(BudgetExceededError):
-        launch(plan(hourly=100.0), new_ledger(tmp_path), STATE, run)
-    assert run.calls == []
+        launch(plan(hourly=100.0), new_ledger(tmp_path), c)  # type: ignore[arg-type]
+    assert c.calls == []
 
 
-def test_launch_records_actual_hourly_rate_from_status(tmp_path: Path) -> None:
-    run, lg = FakeRunner(), new_ledger(tmp_path)
-    out = launch(plan(), lg, STATE, run)
+def test_launch_records_the_actual_hourly_rate(tmp_path: Path) -> None:
+    c, lg = FakeClient(cost=1.5), new_ledger(tmp_path)
+    out = launch(plan(), lg, c)  # type: ignore[arg-type]
     assert out["pod_id"] == "pod123" and out["hourly_usd"] == 1.5
     assert [p.hourly_usd for p in lg.running("dlm-test")] == [1.5]
 
 
-def test_launch_falls_back_to_the_price_cap_when_status_is_unreadable(tmp_path: Path) -> None:
-    run = FakeRunner({"status": (0, "garbage", "")})
-    out = launch(plan(hourly=2.0), new_ledger(tmp_path), STATE, run)
+def test_unreadable_price_falls_back_to_the_cap(tmp_path: Path) -> None:
+    out = launch(plan(hourly=2.0), new_ledger(tmp_path), FakeClient(cost="n/a"))  # type: ignore[arg-type]
     assert out["hourly_usd"] == 2.0
 
 
-def test_failed_rp_up_leaves_ledger_untouched(tmp_path: Path) -> None:
-    run, lg = FakeRunner({"up": (1, "", "no instances available")}), new_ledger(tmp_path)
-    with pytest.raises(PodError, match="no instances"):
-        launch(plan(), lg, STATE, run)
-    assert not lg.pods
+def test_a_pod_above_the_price_cap_is_terminated(tmp_path: Path) -> None:
+    c, lg = FakeClient(cost=9.0), new_ledger(tmp_path)
+    with pytest.raises(PodError, match="above"):
+        launch(plan(hourly=2.0), lg, c)  # type: ignore[arg-type]
+    assert "terminate" in c.calls and not lg.pods
 
 
-def test_ledger_failure_after_launch_tears_the_pod_down(
+def test_ledger_failure_after_create_terminates_the_pod(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run, lg = FakeRunner(), new_ledger(tmp_path)
+    c, lg = FakeClient(), new_ledger(tmp_path)
 
     def boom(*a: object, **k: object) -> None:
         raise OSError("disk full")
 
     monkeypatch.setattr(lg, "start", boom)
     with pytest.raises(OSError, match="disk full"):
-        launch(plan(), lg, STATE, run)
-    assert "down" in run.calls  # never leave a pod the ledger does not know about
+        launch(plan(), lg, c)  # type: ignore[arg-type]
+    assert "terminate" in c.calls
 
 
-def test_second_launch_with_a_running_pod_is_refused(tmp_path: Path) -> None:
+def test_second_launch_while_one_is_running_is_refused(tmp_path: Path) -> None:
     lg = new_ledger(tmp_path)
-    launch(plan(), lg, STATE, FakeRunner())
+    launch(plan(), lg, FakeClient())  # type: ignore[arg-type]
     with pytest.raises(PodError, match="already shows a running"):
-        launch(plan(), lg, STATE, FakeRunner())
+        launch(plan(), lg, FakeClient())  # type: ignore[arg-type]
 
 
-def test_stop_records_only_after_the_pod_is_verified_gone(tmp_path: Path) -> None:
-    lg = new_ledger(tmp_path)
-    launch(plan(), lg, STATE, FakeRunner())
+def test_stop_waits_for_the_pod_to_disappear_then_records(tmp_path: Path) -> None:
+    c, lg = FakeClient(still_listed_for=2), new_ledger(tmp_path)
+    launch(plan(), lg, c)  # type: ignore[arg-type]
+    sleeps: list[float] = []
+    out = stop(plan(), lg, c, sleep=sleeps.append)  # type: ignore[arg-type]
+    assert out["running"] == [] and len(sleeps) >= 1
+
+
+def test_stop_never_records_while_the_pod_is_still_listed(tmp_path: Path) -> None:
+    c, lg = FakeClient(still_listed_for=10**6), new_ledger(tmp_path)
+    launch(plan(), lg, c)  # type: ignore[arg-type]
     with pytest.raises(PodError, match="still present"):
-        stop(plan(), lg, STATE, FakeRunner(), list_names=lambda: ["dlm-test"])
+        stop(plan(), lg, c, verify_secs=0, sleep=lambda s: None)  # type: ignore[arg-type]
     assert lg.running("dlm-test")  # still billing as far as we know
-    out = stop(plan(), lg, STATE, FakeRunner(), list_names=lambda: ["someone-elses-pod"])
-    assert out["running"] == [] and not lg.running()
 
 
-def test_stop_failure_keeps_ledger_running(tmp_path: Path) -> None:
+def test_an_unreadable_pod_list_is_not_treated_as_clear(tmp_path: Path) -> None:
+    class Broken(FakeClient):
+        def list_pods(self) -> list[dict[str, Any]]:
+            raise ApiError(500, "down")
+
     lg = new_ledger(tmp_path)
-    launch(plan(), lg, STATE, FakeRunner())
-    with pytest.raises(PodError, match="rp down failed"):
-        stop(plan(), lg, STATE, FakeRunner({"down": (1, "", "api down")}), list_names=lambda: [])
-    assert lg.running()
-
-
-def test_pod_list_is_fail_closed() -> None:
-    ok = FakeRunner({"list": (0, '[{"id":"a","name":"x","env":{"K":"secret"}}]', "")})
-    assert runpodctl_pod_names(ok) == ["x"]
-    with pytest.raises(PodError):
-        runpodctl_pod_names(FakeRunner({"list": (1, "", "")}))
-    with pytest.raises(PodError):
-        runpodctl_pod_names(FakeRunner({"list": (0, "not json", "")}))
+    launch(plan(), lg, Broken())  # type: ignore[arg-type]
+    with pytest.raises(PodError, match="could not list"):
+        stop(plan(), lg, Broken(), verify_secs=0, sleep=lambda s: None)  # type: ignore[arg-type]
+    assert lg.running("dlm-test")
